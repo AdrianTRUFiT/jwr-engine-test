@@ -37,7 +37,7 @@ app.post("/create-checkout-session", async (req, res) => {
         }
       ],
       success_url: `${FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${FRONTEND_URL}/donate.html`
+      cancel_url: `${FRONTEND_URL}/index.html`
     });
 
     res.json({ url: session.url });
