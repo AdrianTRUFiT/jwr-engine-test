@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<body>
+
+<h2>Donation Verification</h2>
+<div id="result">Checking...</div>
+
+<script>
+async function verify() {
+  const params = new URLSearchParams(window.location.search);
+  const id = params.get("session_id");
+
+  const res = await fetch(`YOUR_BACKEND_URL/verify-donation/${id}`);
+  const data = await res.json();
+
+  if (data.verified) {
+    document.getElementById("result").innerText = "Payment Verified ✔";
+  } else {
+    document.getElementById("result").innerText = "Verification Failed ❌";
+  }
+}
+
+verify();
+</script>
+
+</body>
+</html>
