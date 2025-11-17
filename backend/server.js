@@ -1,68 +1,100 @@
-// backend/server.js
 import express from "express";
-import Stripe from "stripe";
 import fs from "fs";
 import path from "path";
+import Stripe from "stripe";
 import cors from "cors";
 import dotenv from "dotenv";
 
 dotenv.config();
 
+// Initialize Express
 const app = express();
 app.use(express.json());
-app.use(cors());
 
-// ENV VARIABLES
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-const FRONTEND_URL = process.env.FRONTEND_URL;
-const stripe = new Stripe(STRIPE_SECRET_KEY);
+// -------------------------------------------
+// CORS — allow Vercel + local development
+// -------------------------------------------
+app.use(
+  cors({
+    origin: [
+      "http://127.0.0.1:3000",
+      "http://localhost:3000",
+      "https://jamaica-we-rise.vercel.app",
+      "https://jamaica-we-rise-1.onrender.com"
+    ],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
-// PATH TO REGISTRY FILE
-const registryFile = path.join(process.cwd(), "data", "registry.json");
+// -------------------------------------------
+// STATIC FRONTEND FILES (local dev only)
+// -------------------------------------------
+const __dirname = path.resolve();
+app.use(express.static(path.join(__dirname, "public")));
 
-// ---------- 1. CREATE CHECKOUT SESSION ----------
+// -------------------------------------------
+// STRIPE SETUP
+// -------------------------------------------
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+
+// -------------------------------------------
+// PERSISTENT REGISTRY (Render disk)
+// -------------------------------------------
+const dataDir = "/data";
+const registryFile = "/data/registry.json";
+
+try {
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  if (!fs.existsSync(registryFile)) {
+    fs.writeFileSync(registryFile, JSON.stringify({ donations: [] }, null, 2));
+  }
+} catch (err) {
+  console.error("DISK INIT ERROR:", err);
+}
+
+// -------------------------------------------
+// 1. CREATE CHECKOUT SESSION
+// -------------------------------------------
 app.post("/create-checkout-session", async (req, res) => {
   try {
+    const { amount, email } = req.body;
+
+    if (!amount || !email) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
+      customer_email: email,
       line_items: [
         {
           price_data: {
             currency: "usd",
-            product_data: { name: "Jamaica Relief Donation" },
-            unit_amount: 100 // $1 donation test
+            product_data: { name: "Jamaica We Rise Donation" },
+            unit_amount: Math.round(amount * 100),
           },
-          quantity: 1
-        }
+          quantity: 1,
+        },
       ],
-      success_url: `${FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${FRONTEND_URL}/index.html`
+      success_url: `${process.env.FRONTEND_URL}/success.html?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.FRONTEND_URL}/cancel.html`,
     });
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error("SESSION ERROR:", err);
-    res.status(500).json({ error: "Session creation failed" });
+    console.error("STRIPE ERROR:", err);
+    res.status(500).json({ error: "Stripe session failed" });
   }
 });
 
-// ---------- 2. VERIFY DONATION ----------
-app.get("/verify-donation/:id", async (req, res) => {
+// -------------------------------------------
+// 2. SAVE DONATION ENTRY (SoulMark)
+// -------------------------------------------
+app.post("/verify-soulmark", (req, res) => {
   try {
-    const session = await stripe.checkout.sessions.retrieve(req.params.id);
-
-    if (!session || session.payment_status !== "paid") {
-      return res.status(400).json({ verified: false });
-    }
-
-    // Write to registry
-    const entry = {
-      id: session.id,
-      amount: session.amount_total,
-      email: session.customer_details?.email || "unknown",
-      timestamp: new Date().toISOString()
-    };
+    const entry = req.body;
 
     const current = JSON.parse(fs.readFileSync(registryFile, "utf8"));
     current.donations.push(entry);
@@ -75,7 +107,50 @@ app.get("/verify-donation/:id", async (req, res) => {
   }
 });
 
-// ---------- 3. START SERVER ----------
-app.listen(10000, () => {
-  console.log("Backend running on port 10000");
+// -------------------------------------------
+// 3. VERIFY DONATION (success.html)
+// -------------------------------------------
+app.get("/verify-donation/:sessionId", async (req, res) => {
+  const { sessionId } = req.params;
+
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (!session || session.payment_status !== "paid") {
+      return res.status(400).json({ error: "Payment not verified" });
+    }
+
+    const registry = JSON.parse(fs.readFileSync(registryFile, "utf8"));
+
+    const match = registry.donations.find(
+      (d) =>
+        d.email === session.customer_email &&
+        Math.round(d.amount * 100) === session.amount_total
+    );
+
+    res.json({
+      email: session.customer_email,
+      amount: session.amount_total / 100,
+      soulmark: match ? match.soulmark : "unverified",
+    });
+  } catch (err) {
+    console.error("VERIFICATION ERROR:", err);
+    res.status(500).json({ error: "Verification failed" });
+  }
+});
+
+// -------------------------------------------
+// 4. DIAGNOSTIC TEST ROUTE
+// -------------------------------------------
+app.get("/test", (req, res) => {
+  res.json({ working: true, time: Date.now() });
+});
+
+// -------------------------------------------
+// 5. START SERVER (local 3000 / Render dynamic)
+// -------------------------------------------
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`Backend running on port ${PORT}`);
 });
